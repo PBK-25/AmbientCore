@@ -1,0 +1,58 @@
+AmbientCore Non-Commercial License
+Version 1.0, 2026
+
+Copyright (c) 2026 PBK-25 (https://github.com/PBK-25)
+
+DEFINITIONS
+
+"Software" means the AmbientCore source code, documentation, and all associated
+files in this repository.
+
+"Non-Commercial Use" means personal, educational, research, or charitable use
+where no revenue, compensation, or commercial advantage is derived — directly or
+indirectly — from the Software or any product or service built upon it.
+
+"Commercial Use" means any use intended for or resulting in commercial advantage
+or monetary compensation, including (but not limited to): selling the Software
+or a product containing it, using it to provide a paid service, or incorporating
+it into a commercial product.
+
+PERMISSIONS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this Software, to:
+
+  1. Use, run, and interact with the Software for Non-Commercial Use.
+  2. Copy and distribute verbatim copies for Non-Commercial Use.
+  3. Modify the Software and distribute modified versions for Non-Commercial Use,
+     provided that this license notice is retained in all copies and that
+     modifications are clearly marked as such.
+
+CONDITIONS
+
+  - This license notice and copyright must be included in all copies or
+    substantial portions of the Software.
+  - Derivative works must be distributed under the same license terms.
+  - You may not sublicense the Software under different terms.
+
+RESTRICTIONS
+
+  - Commercial Use of the Software, in whole or in part, is strictly prohibited
+    without prior written permission from the copyright holder.
+  - You may not use the name "AmbientCore" or the author's identity to endorse
+    or promote products derived from this Software without permission.
+
+REQUESTING COMMERCIAL USE
+
+To obtain a commercial licence, contact the copyright holder via GitHub:
+https://github.com/PBK-25
+
+DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
