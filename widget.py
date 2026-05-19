@@ -1,7 +1,9 @@
 import asyncio
+import csv
 import threading
 import tkinter as tk
 from tkinter import messagebox
+from datetime import datetime, timedelta
 import psutil
 import pystray
 import subprocess
@@ -17,16 +19,16 @@ from bleak import BleakClient
 TARGET_ADDRESS = "A4:C1:38:87:3F:10"
 DATA_UUID      = "ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6"
 
-# Support both normal Python execution and PyInstaller frozen exe
 if getattr(sys, "frozen", False):
-    _DIR    = os.path.dirname(sys.executable)   # folder containing the .exe
-    _BUNDLE = sys._MEIPASS                       # folder where bundled files live
+    _DIR    = os.path.dirname(sys.executable)
+    _BUNDLE = sys._MEIPASS
 else:
     _DIR    = os.path.dirname(os.path.abspath(__file__))
     _BUNDLE = _DIR
 
-CONFIG_FILE = os.path.join(_DIR,    "config.json")   # lives next to exe (user-writable)
-ICON_PATH   = os.path.join(_BUNDLE, "icon.ico")      # bundled inside the exe
+CONFIG_FILE = os.path.join(_DIR,    "config.json")
+ICON_PATH   = os.path.join(_BUNDLE, "icon.ico")
+LOG_DIR     = _DIR
 
 DEFAULT_CFG = {
     "room_warn":      40.0,
@@ -35,18 +37,50 @@ DEFAULT_CFG = {
     "cpu_usage_warn": 90.0,
     "ram_warn":       85.0,
     "sound_alarm":    True,
+    "theme":          "dark",
 }
 
-BG     = "#1e1e1e"
-PANEL  = "#252526"
-BORDER = "#3c3c3c"
-DIM    = "#6e6e6e"
-WHITE  = "#d4d4d4"
-BLUE   = "#4fc3f7"
-GREEN  = "#a5d6a7"
-ORANGE = "#ffb74d"
-RED    = "#ef5350"
-YELLOW = "#ffd54f"
+# ── Theme ──────────────────────────────────────────────────────────────────────
+_DARK = {
+    "BG":     "#1e1e1e",
+    "PANEL":  "#252526",
+    "BORDER": "#3c3c3c",
+    "DIM":    "#6e6e6e",
+    "WHITE":  "#d4d4d4",
+    "BLUE":   "#4fc3f7",
+    "GREEN":  "#a5d6a7",
+    "ORANGE": "#ffb74d",
+    "RED":    "#ef5350",
+    "YELLOW": "#ffd54f",
+}
+_LIGHT = {
+    "BG":     "#f5f5f5",
+    "PANEL":  "#e8e8e8",
+    "BORDER": "#bdbdbd",
+    "DIM":    "#757575",
+    "WHITE":  "#212121",
+    "BLUE":   "#0288d1",
+    "GREEN":  "#388e3c",
+    "ORANGE": "#e64a19",
+    "RED":    "#c62828",
+    "YELLOW": "#f57f17",
+}
+
+BG = PANEL = BORDER = DIM = WHITE = BLUE = GREEN = ORANGE = RED = YELLOW = ""
+
+def _load_theme():
+    global BG, PANEL, BORDER, DIM, WHITE, BLUE, GREEN, ORANGE, RED, YELLOW
+    t  = _DARK if cfg.get("theme", "dark") == "dark" else _LIGHT
+    BG     = t["BG"]
+    PANEL  = t["PANEL"]
+    BORDER = t["BORDER"]
+    DIM    = t["DIM"]
+    WHITE  = t["WHITE"]
+    BLUE   = t["BLUE"]
+    GREEN  = t["GREEN"]
+    ORANGE = t["ORANGE"]
+    RED    = t["RED"]
+    YELLOW = t["YELLOW"]
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 def load_cfg():
@@ -66,6 +100,7 @@ def save_cfg():
         json.dump(cfg, f, indent=2)
 
 cfg = load_cfg()
+_load_theme()
 
 # ── Shared sensor state ────────────────────────────────────────────────────────
 sensors = {
@@ -86,6 +121,82 @@ sensors = {
 
 _alarm_active = False
 tray_obj      = None
+
+# ── CSV logging ────────────────────────────────────────────────────────────────
+_LOG_FIELDS = [
+    "timestamp", "room_temp", "room_hum", "room_batt_mv",
+    "cpu_usage", "cpu_temp", "gpu_temp", "gpu_usage",
+    "ram_usage", "disk_usage",
+]
+_24h_buffer = []   # list of (datetime, float) for room_temp
+_24h_lock   = threading.Lock()
+
+
+def _fmt(v):
+    if v is None:
+        return ""
+    return f"{v:.2f}" if isinstance(v, float) else str(v)
+
+
+def _log_reading():
+    if sensors["room_temp"] is None:
+        return
+    now      = datetime.now()
+    log_path = os.path.join(LOG_DIR, f"AmbientCore_{now.strftime('%Y-%m-%d')}.csv")
+    new_file = not os.path.exists(log_path)
+
+    row = {
+        "timestamp":    now.strftime("%Y-%m-%d %H:%M:%S"),
+        "room_temp":    _fmt(sensors["room_temp"]),
+        "room_hum":     _fmt(sensors["room_hum"]),
+        "room_batt_mv": _fmt(sensors["room_batt"]),
+        "cpu_usage":    _fmt(sensors["cpu_usage"]),
+        "cpu_temp":     _fmt(sensors["cpu_temp"]),
+        "gpu_temp":     _fmt(sensors["gpu_temp"]),
+        "gpu_usage":    _fmt(sensors["gpu_usage"]),
+        "ram_usage":    _fmt(sensors["ram_usage"]),
+        "disk_usage":   _fmt(sensors["disk_usage"]),
+    }
+    try:
+        with open(log_path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=_LOG_FIELDS)
+            if new_file:
+                w.writeheader()
+            w.writerow(row)
+    except Exception:
+        pass
+
+    cutoff = now - timedelta(hours=24)
+    with _24h_lock:
+        _24h_buffer.append((now, sensors["room_temp"]))
+        while _24h_buffer and _24h_buffer[0][0] < cutoff:
+            _24h_buffer.pop(0)
+
+
+def _load_csv_history():
+    """Read yesterday + today CSV files; return sorted list of (datetime, float) tuples."""
+    now    = datetime.now()
+    cutoff = now - timedelta(hours=24)
+    results = []
+    for delta in (1, 0):
+        day  = now - timedelta(days=delta)
+        path = os.path.join(LOG_DIR, f"AmbientCore_{day.strftime('%Y-%m-%d')}.csv")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, newline="") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        ts = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
+                        t  = float(row["room_temp"])
+                        if ts >= cutoff:
+                            results.append((ts, t))
+                    except (ValueError, KeyError):
+                        pass
+        except Exception:
+            pass
+    return sorted(results)
+
 
 # ── BLE thread ─────────────────────────────────────────────────────────────────
 def _ble_notify(sender, raw):
@@ -109,8 +220,6 @@ def run_ble():
     asyncio.run(_ble_loop())
 
 # ── LibreHardwareMonitor WMI query ─────────────────────────────────────────────
-# LHM must be running for this to return data.
-# Download free from: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
 _LHM_PS = (
     "try {"
     "  $s = Get-WmiObject -Namespace root\\LibreHardwareMonitor -Class Sensor -EA Stop;"
@@ -162,7 +271,6 @@ def _parse_lhm(items):
             if rpm > 0:
                 out["fans"][name] = rpm
 
-    # Fall back to hottest core if package sensor not found
     if "cpu_temp" not in out and cpu_core_temps:
         out["cpu_temp"] = round(max(cpu_core_temps), 1)
 
@@ -173,7 +281,6 @@ def run_stats():
     lhm_countdown = 0
 
     while True:
-        # CPU usage + RAM + Disk — always available via psutil
         sensors["cpu_usage"] = psutil.cpu_percent(interval=1)
         sensors["ram_usage"] = psutil.virtual_memory().percent
         try:
@@ -181,7 +288,6 @@ def run_stats():
         except Exception:
             sensors["disk_usage"] = None
 
-        # GPU via nvidia-smi
         try:
             r = subprocess.run(
                 ["nvidia-smi",
@@ -199,7 +305,6 @@ def run_stats():
         except Exception:
             sensors["gpu_temp"] = sensors["gpu_usage"] = None
 
-        # LibreHardwareMonitor — poll every ~3 s to keep overhead low
         lhm_countdown -= 1
         if lhm_countdown <= 0:
             lhm_data = _query_lhm()
@@ -208,7 +313,6 @@ def run_stats():
                 for key in ("cpu_temp", "disk_temp", "ram_temp", "fans"):
                     if key in parsed:
                         sensors[key] = parsed[key]
-                # Use LHM GPU temp if nvidia-smi gave nothing
                 if sensors["gpu_temp"] is None and "gpu_temp" in parsed:
                     sensors["gpu_temp"] = parsed["gpu_temp"]
                 sensors["lhm_active"] = True
@@ -219,13 +323,10 @@ def run_stats():
                 sensors["ram_temp"]   = None
                 sensors["fans"]       = {}
                 sensors["lhm_active"] = False
-                lhm_countdown = 10  # back off when LHM is not running
+                lhm_countdown = 10
 
-# ── Alarm — continuous beep + voice loop ───────────────────────────────────────
-_alarm_active = False
-
+# ── Alarm ──────────────────────────────────────────────────────────────────────
 def _tts(text):
-    """Speak text via Windows built-in speech synthesis. No extra packages needed."""
     ps = (
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
@@ -243,7 +344,6 @@ def _tts(text):
 def _alarm_worker():
     global _alarm_active
     while _alarm_active:
-        # Beep Beep Beep
         for _ in range(3):
             if not _alarm_active:
                 return
@@ -256,13 +356,11 @@ def _alarm_worker():
         if not _alarm_active:
             return
 
-        # Voice announcement
         _tts("Room temperature critical. Please shut down power now.")
 
         if not _alarm_active:
             return
 
-        # Beep Beep Beep
         for _ in range(3):
             if not _alarm_active:
                 return
@@ -272,7 +370,6 @@ def _alarm_worker():
                 pass
             time.sleep(0.12)
 
-        # 8-second pause before repeating — check flag every 100 ms so it stops fast
         for _ in range(80):
             if not _alarm_active:
                 return
@@ -288,7 +385,7 @@ def _clear_alarm():
     global _alarm_active
     _alarm_active = False
 
-# ── Tray icon — draws live temp + humidity on the icon ─────────────────────────
+# ── Tray icon ──────────────────────────────────────────────────────────────────
 def _tray_image():
     img  = Image.new("RGBA", (64, 64), (30, 30, 30, 255))
     draw = ImageDraw.Draw(img)
@@ -326,9 +423,13 @@ def run_tray():
             lambda i, it: root.after(0, _show_dashboard),
             default=True,
         ),
+        pystray.MenuItem(
+            "24h Graph",
+            lambda i, it: root.after(0, lambda: GraphWindow(root)),
+        ),
         pystray.MenuItem("Exit", lambda i, it: root.after(0, _exit_app)),
     )
-    tray_obj = pystray.Icon("ClimateMonitor", _tray_image(), "Connecting…", menu)
+    tray_obj = pystray.Icon("AmbientCore", _tray_image(), "Connecting…", menu)
     tray_obj.run()
 
 def _show_dashboard():
@@ -343,7 +444,7 @@ def _exit_app():
     root.destroy()
     sys.exit(0)
 
-# ── Shared GUI helpers ─────────────────────────────────────────────────────────
+# ── GUI helpers ────────────────────────────────────────────────────────────────
 def _alarm_color(val, default, warn_key, crit_key=None):
     if val is None or warn_key not in cfg:
         return default
@@ -373,10 +474,145 @@ def _make_row(parent, label_text, default_color):
     lbl.pack(side="left")
     return lbl
 
+# ── 24-hour graph window ───────────────────────────────────────────────────────
+_mpl = None
+
+def _ensure_mpl():
+    global _mpl
+    if _mpl is not None:
+        return _mpl
+    import matplotlib
+    matplotlib.use("TkAgg")
+    import matplotlib.dates as mdates
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    _mpl = (matplotlib, mdates, Figure, FigureCanvasTkAgg)
+    return _mpl
+
+class GraphWindow:
+    def __init__(self, master):
+        self.w = tk.Toplevel(master)
+        self.w.title("24h Temperature — Room Sensor")
+        self.w.geometry("760x440")
+        self.w.configure(bg=BG)
+        self.w.resizable(True, True)
+        self.w.attributes("-topmost", True)
+        self._after_id = None
+        self._build()
+        self.w.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build(self):
+        _, _, Figure, FigureCanvasTkAgg = _ensure_mpl()
+        is_dark = cfg.get("theme", "dark") == "dark"
+        fig_bg  = "#1e1e1e" if is_dark else "#f5f5f5"
+        ax_bg   = "#252526" if is_dark else "#e8e8e8"
+
+        self.fig = Figure(figsize=(7.6, 4.1), dpi=100, facecolor=fig_bg)
+        self.ax  = self.fig.add_subplot(111, facecolor=ax_bg)
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.w)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=(8, 0))
+
+        bar = tk.Frame(self.w, bg=BG)
+        bar.pack(fill="x", padx=8, pady=(4, 6))
+        tk.Button(
+            bar, text="Open Log Folder",
+            font=("Segoe UI", 9), bg=PANEL, fg=WHITE,
+            relief="flat", activebackground=BORDER, activeforeground=WHITE,
+            padx=8, pady=3, cursor="hand2",
+            command=lambda: subprocess.Popen(["explorer", LOG_DIR]),
+        ).pack(side="left")
+        self.refresh_lbl = tk.Label(bar, text="", font=("Segoe UI", 8), fg=DIM, bg=BG)
+        self.refresh_lbl.pack(side="right")
+
+        self._schedule_refresh()
+
+    def _redraw(self):
+        _, mdates, _, _ = _ensure_mpl()
+        is_dark = cfg.get("theme", "dark") == "dark"
+        txt_col = "#d4d4d4" if is_dark else "#212121"
+        line_c  = "#4fc3f7" if is_dark else "#0288d1"
+        fill_c  = "#4fc3f7" if is_dark else "#0288d1"
+        grid_c  = "#3c3c3c" if is_dark else "#bdbdbd"
+        ax_bg   = "#252526" if is_dark else "#e8e8e8"
+
+        ax = self.ax
+        ax.clear()
+        ax.set_facecolor(ax_bg)
+
+        # Merge CSV history with in-memory buffer; deduplicate by minute
+        csv_data = _load_csv_history()
+        with _24h_lock:
+            buf = list(_24h_buffer)
+
+        seen = {}
+        for ts, v in csv_data + buf:
+            seen[ts.replace(second=0, microsecond=0)] = (ts, v)
+        merged = sorted(seen.values())
+
+        if len(merged) >= 2:
+            xs = [p[0] for p in merged]
+            ys = [p[1] for p in merged]
+            ax.plot(xs, ys, color=line_c, linewidth=1.5, zorder=3)
+            ax.fill_between(xs, ys, alpha=0.15, color=fill_c, zorder=2)
+            ax.annotate(
+                f"{ys[-1]:.1f}°C",
+                xy=(xs[-1], ys[-1]),
+                xytext=(-44, 8), textcoords="offset points",
+                color=line_c, fontsize=9, fontweight="bold",
+            )
+        elif len(merged) == 1:
+            xs = [p[0] for p in merged]
+            ys = [p[1] for p in merged]
+            ax.scatter(xs, ys, color=line_c, zorder=3, s=20)
+
+        ax.axhline(
+            cfg["room_warn"], color="#ffd54f", linewidth=1, linestyle="--",
+            label=f"Warning {cfg['room_warn']:.0f}°C", zorder=4,
+        )
+        ax.axhline(
+            cfg["room_critical"], color="#ef5350", linewidth=1, linestyle="--",
+            label=f"Critical {cfg['room_critical']:.0f}°C", zorder=4,
+        )
+
+        now = datetime.now()
+        ax.set_xlim(now - timedelta(hours=24), now)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+        ax.tick_params(colors=txt_col, labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color(grid_c)
+        ax.set_ylabel("Room Temperature (°C)", color=txt_col, fontsize=9)
+        ax.grid(True, color=grid_c, linewidth=0.5, alpha=0.7, zorder=1)
+        ax.legend(fontsize=8, facecolor=ax_bg, edgecolor=grid_c, labelcolor=txt_col)
+
+        if not merged:
+            ax.text(
+                0.5, 0.5, "No data yet — waiting for sensor readings",
+                transform=ax.transAxes, ha="center", va="center",
+                color=txt_col, fontsize=10,
+            )
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+        self.refresh_lbl.config(text=f"Updated {datetime.now().strftime('%H:%M:%S')}")
+
+    def _schedule_refresh(self):
+        self._redraw()
+        self._after_id = self.w.after(60_000, self._schedule_refresh)
+
+    def _on_close(self):
+        if self._after_id:
+            self.w.after_cancel(self._after_id)
+        self.w.destroy()
+
+
 # ── Dashboard ──────────────────────────────────────────────────────────────────
 class Dashboard:
     def __init__(self, master):
-        self.root = master
+        self.root      = master
+        self._tick_id  = None
+        self._log_cnt  = 0
         master.title("System & Climate Monitor")
         master.geometry("400x680")
         master.configure(bg=BG)
@@ -394,66 +630,80 @@ class Dashboard:
         content = tk.Frame(self.root, bg=BG)
         content.pack(fill="both", expand=True, padx=12)
 
-        # Electrical Connections — Xiaomi sensor
         s = _make_section(content, "ELECTRICAL CONNECTIONS", BLUE)
         self.e_temp = _make_row(s, "Temperature", BLUE)
         self.e_hum  = _make_row(s, "Humidity",    GREEN)
         self.e_batt = _make_row(s, "Battery",     DIM)
 
-        # CPU
         s = _make_section(content, "CPU", ORANGE)
         self.cpu_usage = _make_row(s, "Usage",       ORANGE)
         self.cpu_temp  = _make_row(s, "Temperature", ORANGE)
 
-        # GPU
         s = _make_section(content, "GPU (NVIDIA)", RED)
         self.gpu_temp  = _make_row(s, "Temperature", RED)
         self.gpu_usage = _make_row(s, "Usage",       RED)
 
-        # RAM
         s = _make_section(content, "MEMORY (RAM)", GREEN)
         self.ram_usage = _make_row(s, "Usage",       GREEN)
         self.ram_temp  = _make_row(s, "Temperature", DIM)
 
-        # Disk
         s = _make_section(content, "DISK  (C:\\)", YELLOW)
         self.disk_usage = _make_row(s, "Usage",       YELLOW)
         self.disk_temp  = _make_row(s, "Temperature", DIM)
 
-        # Fans
         self.fan_body = _make_section(content, "FANS", DIM)
         self.fan_rows = {}
 
-        # LHM status notice (always visible, text changes)
         self.lhm_lbl = tk.Label(
-            content,
-            text="",
-            font=("Segoe UI", 8), fg=DIM, bg=BG,
+            content, text="", font=("Segoe UI", 8), fg=DIM, bg=BG,
             wraplength=370, justify="left",
         )
         self.lhm_lbl.pack(anchor="w", pady=(10, 0))
 
-        # Status bar + settings button
         bar = tk.Frame(self.root, bg=BG)
         bar.pack(fill="x", padx=12, pady=(4, 10))
         self.status_lbl = tk.Label(bar, text="Connecting…",
                                    font=("Segoe UI", 8), fg=DIM, bg=BG)
         self.status_lbl.pack(side="left")
-        tk.Button(bar, text="⚙  Settings", font=("Segoe UI", 9),
-                  bg=PANEL, fg=WHITE, relief="flat",
-                  activebackground=BORDER, activeforeground=WHITE,
-                  padx=8, pady=3, cursor="hand2",
-                  command=lambda: SettingsWindow(self.root)).pack(side="right")
+        tk.Button(
+            bar, text="Graph", font=("Segoe UI", 9),
+            bg=PANEL, fg=WHITE, relief="flat",
+            activebackground=BORDER, activeforeground=WHITE,
+            padx=8, pady=3, cursor="hand2",
+            command=lambda: GraphWindow(self.root),
+        ).pack(side="right", padx=(4, 0))
+        tk.Button(
+            bar, text="⚙  Settings", font=("Segoe UI", 9),
+            bg=PANEL, fg=WHITE, relief="flat",
+            activebackground=BORDER, activeforeground=WHITE,
+            padx=8, pady=3, cursor="hand2",
+            command=lambda: SettingsWindow(self.root, self),
+        ).pack(side="right")
 
     def _tick(self):
         self._refresh()
         _refresh_tray()
-        self.root.after(1000, self._tick)
+        self._log_cnt += 1
+        if self._log_cnt >= 30:
+            _log_reading()
+            self._log_cnt = 0
+        self._tick_id = self.root.after(1000, self._tick)
+
+    def rebuild(self):
+        """Destroy all widgets, reload theme, and recreate everything."""
+        if self._tick_id:
+            self.root.after_cancel(self._tick_id)
+            self._tick_id = None
+        for w in self.root.winfo_children():
+            w.destroy()
+        _load_theme()
+        self.root.configure(bg=BG)
+        self._build()
+        self._tick()
 
     def _refresh(self):
         s = sensors
 
-        # ── Electrical Connections ──
         room_t = s["room_temp"]
         room_h = s["room_hum"]
         room_b = s["room_batt"]
@@ -476,7 +726,6 @@ class Dashboard:
             pct = max(0, min(100, int((room_b - 2500) / 600 * 100)))
             self.e_batt.config(text=f"{room_b} mV  (~{pct}%)")
 
-        # ── CPU ──
         cu = s["cpu_usage"]
         self.cpu_usage.config(
             text=f"{cu:.0f}%" if cu is not None else "---",
@@ -488,7 +737,6 @@ class Dashboard:
             fg=ORANGE if ct is not None else DIM,
         )
 
-        # ── GPU ──
         gt = s["gpu_temp"]
         self.gpu_temp.config(
             text=f"{gt:.0f}°C" if gt is not None else "N/A",
@@ -497,7 +745,6 @@ class Dashboard:
         gu = s["gpu_usage"]
         self.gpu_usage.config(text=f"{gu:.0f}%" if gu is not None else "N/A")
 
-        # ── RAM ──
         ru = s["ram_usage"]
         self.ram_usage.config(
             text=f"{ru:.0f}%" if ru is not None else "---",
@@ -509,7 +756,6 @@ class Dashboard:
             fg=WHITE if ram_t is not None else DIM,
         )
 
-        # ── Disk ──
         du = s["disk_usage"]
         self.disk_usage.config(text=f"{du:.0f}%" if du is not None else "---")
         disk_t = s["disk_temp"]
@@ -518,7 +764,6 @@ class Dashboard:
             fg=WHITE if disk_t is not None else DIM,
         )
 
-        # ── Fans ──
         fans = s["fans"]
         for name in list(self.fan_rows):
             if name not in fans and name != "__none__":
@@ -550,7 +795,6 @@ class Dashboard:
                 lbl.pack(anchor="w")
                 self.fan_rows["__none__"] = (f, lbl)
 
-        # ── LHM notice ──
         if s["lhm_active"]:
             self.lhm_lbl.config(
                 text="✓  LibreHardwareMonitor active — full sensor data",
@@ -568,10 +812,11 @@ class Dashboard:
 
 # ── Settings window ────────────────────────────────────────────────────────────
 class SettingsWindow:
-    def __init__(self, parent):
+    def __init__(self, parent, dashboard=None):
+        self._dashboard = dashboard
         self.w = tk.Toplevel(parent)
-        self.w.title("Alarm Settings")
-        self.w.geometry("340x390")
+        self.w.title("Settings")
+        self.w.geometry("340x470")
         self.w.configure(bg=BG)
         self.w.attributes("-topmost", True)
         self.w.resizable(False, False)
@@ -615,6 +860,20 @@ class SettingsWindow:
                  text="Warning → yellow   │   Critical → red + repeating voice alarm",
                  font=("Segoe UI", 8), fg=DIM, bg=BG).pack(pady=(4, 0))
 
+        # Theme
+        tk.Frame(self.w, bg=BORDER, height=1).pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(self.w, text="THEME",
+                 font=("Segoe UI", 10, "bold"), fg=BLUE, bg=BG).pack(pady=(0, 4))
+        theme_row = tk.Frame(self.w, bg=BG)
+        theme_row.pack(pady=(0, 4))
+        self.theme_var = tk.StringVar(value=cfg.get("theme", "dark"))
+        for label, val in (("Dark", "dark"), ("Light", "light")):
+            tk.Radiobutton(
+                theme_row, text=label, variable=self.theme_var, value=val,
+                font=("Segoe UI", 9), fg=WHITE, bg=BG,
+                selectcolor=PANEL, activebackground=BG, activeforeground=WHITE,
+            ).pack(side="left", padx=20)
+
         tk.Button(self.w, text="Save", font=("Segoe UI", 9, "bold"),
                   bg=BLUE, fg="#000", relief="flat", padx=16, pady=4,
                   cursor="hand2", command=self._save).pack(pady=(14, 8))
@@ -630,15 +889,18 @@ class SettingsWindow:
                 "Invalid Input", "Warning must be less than Critical.", parent=self.w
             )
             return
+        theme_changed = cfg.get("theme", "dark") != self.theme_var.get()
         cfg.update(vals)
         cfg["sound_alarm"] = self.sound_var.get()
+        cfg["theme"]       = self.theme_var.get()
         save_cfg()
         self.w.destroy()
+        if theme_changed and self._dashboard:
+            self._dashboard.rebuild()
 
 
 # ── First-run setup (only triggers when running as a compiled .exe) ────────────
 def _first_run_setup():
-    """When running as an exe for the first time, offer startup + shortcut install."""
     import winreg as _wr
     import ctypes
 
@@ -646,7 +908,6 @@ def _first_run_setup():
     if os.path.exists(marker):
         return
 
-    # Ask user
     resp = ctypes.windll.user32.MessageBoxW(
         0,
         "Welcome to AmbientCore!\n\n"
@@ -654,10 +915,9 @@ def _first_run_setup():
         "  • Start AmbientCore automatically with Windows\n"
         "  • Add a shortcut to your Desktop\n",
         "AmbientCore Setup",
-        0x00000024,  # MB_YESNO | MB_ICONQUESTION
+        0x00000024,
     )
-    if resp == 6:  # IDYES
-        # Startup registry entry
+    if resp == 6:
         cmd = f'"{sys.executable}"'
         try:
             key = _wr.OpenKey(
@@ -670,7 +930,6 @@ def _first_run_setup():
         except Exception:
             pass
 
-        # Desktop shortcut via VBScript
         try:
             key2 = _wr.OpenKey(
                 _wr.HKEY_CURRENT_USER,
@@ -705,7 +964,6 @@ def _first_run_setup():
             if os.path.exists(vbs_path):
                 os.remove(vbs_path)
 
-    # Write marker so this never runs again
     open(marker, "w").close()
 
 

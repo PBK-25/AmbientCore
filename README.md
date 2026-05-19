@@ -56,7 +56,10 @@ The **system tray icon** near the Windows clock shows room temperature on top an
 - **System tray icon** — always-on, live values drawn directly onto the icon graphic
 - **Two-tier alarm system** — configurable warning (yellow) and critical (red) thresholds per sensor
 - **Repeating voice + beep alarm** — on critical room temperature: three beep tones → spoken alert via Windows built-in speech → three beep tones → 8-second pause → repeats until temperature drops
-- **Persistent settings** — alarm thresholds saved to `config.json`, survive restarts
+- **CSV data logging** — all sensor readings written to daily CSV files (`AmbientCore_YYYY-MM-DD.csv`) every 30 seconds, stored next to the app
+- **24-hour temperature graph** — matplotlib chart showing the last 24 hours of room temperature with warning/critical threshold lines; opens from the dashboard or tray menu; auto-refreshes every 60 seconds
+- **Light theme** — switch between dark and light colour schemes from Settings; takes effect instantly without restarting
+- **Persistent settings** — alarm thresholds and theme saved to `config.json`, survive restarts
 - **Auto-reconnect** — recovers automatically if Bluetooth drops, retries every 10 seconds
 - **Windows startup** — optional auto-start with Windows via registry (no admin rights needed)
 - **Standalone EXE** — can be compiled to a self-contained executable with no Python requirement
@@ -96,7 +99,7 @@ cd AmbientCore
 
 **2. Install dependencies**
 ```powershell
-pip install bleak pystray pillow psutil
+pip install bleak pystray pillow psutil matplotlib
 ```
 
 | Package | Purpose |
@@ -105,8 +108,9 @@ pip install bleak pystray pillow psutil
 | `pystray` | System tray icon |
 | `pillow` | Drawing live values onto the tray icon + icon generation |
 | `psutil` | CPU, RAM, disk stats |
+| `matplotlib` | 24-hour temperature graph |
 
-Everything else (`tkinter`, `winsound`, `subprocess`, `asyncio`) is Python standard library.
+Everything else (`tkinter`, `winsound`, `subprocess`, `asyncio`, `csv`) is Python standard library.
 
 **3. Find your sensor's MAC address**
 ```powershell
@@ -298,14 +302,42 @@ python install.py --uninstall
 
 ---
 
+## CSV Data Logging
+
+AmbientCore writes all sensor readings to a daily CSV file every 30 seconds:
+
+```
+AmbientCore_2026-05-20.csv
+```
+
+Columns: `timestamp, room_temp, room_hum, room_batt_mv, cpu_usage, cpu_temp, gpu_temp, gpu_usage, ram_usage, disk_usage`
+
+Files are stored in the same folder as the app (or exe). Click **Open Log Folder** in the graph window to open that location directly in Explorer.
+
+---
+
+## 24-Hour Temperature Graph
+
+Click **Graph** in the dashboard bottom bar (or **24h Graph** in the tray menu) to open a matplotlib chart of the last 24 hours of room temperature. The chart:
+
+- Merges on-disk CSV history with the current session's in-memory buffer
+- Shows dashed warning and critical threshold lines
+- Auto-refreshes every 60 seconds
+- Adapts colours to the active dark/light theme
+
+---
+
+## Light Theme
+
+Open **⚙ Settings** and choose **Dark** or **Light** under the Theme section. The dashboard rebuilds instantly — no restart required.
+
+---
+
 ## Roadmap
 
 - [ ] Win+W Widget Board support (PWA / Microsoft Store)
 - [ ] Multi-sensor support — monitor several rooms at once
-- [ ] CSV data logging with timestamps
-- [ ] 24-hour temperature graph
 - [ ] AMD GPU support via WMI
-- [ ] Light theme option
 
 ---
 

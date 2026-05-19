@@ -63,6 +63,12 @@ def build():
         "--hidden-import",  "bleak.backends.service",
         "--hidden-import",  "pystray._win32",
         "--hidden-import",  "PIL._tkinter_finder",
+        # matplotlib + TkAgg backend for the 24h graph
+        "--hidden-import",  "matplotlib",
+        "--hidden-import",  "matplotlib.backends.backend_tkagg",
+        "--hidden-import",  "matplotlib.backends._backend_tk",
+        "--hidden-import",  "matplotlib.figure",
+        "--hidden-import",  "matplotlib.dates",
         os.path.join(SCRIPT_DIR, "widget.py"),
     ]
 
