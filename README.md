@@ -13,7 +13,7 @@ AmbientCore sits quietly in your Windows system tray and gives you two things at
 - **Your environment** — live temperature and humidity from a Bluetooth sensor (tested with Xiaomi LYWSD03MMC, adaptable to any BLE sensor)
 - **Your hardware** — CPU, GPU, RAM, disk, and fan data pulled directly from your PC
 
-Click the tray icon to open the full dark-mode dashboard. Close the dashboard and it keeps running in the background.
+Click the tray icon to open the full dark-mode dashboard. Close the dashboard and it keeps running in the background. AmbientCore can start automatically with Windows and requires no terminal once installed.
 
 ---
 
@@ -43,20 +43,23 @@ Click the tray icon to open the full dark-mode dashboard. Close the dashboard an
 └──────────────── ⚙ Settings ─────────┘
 ```
 
-The **system tray icon** near the Windows clock shows the room temperature on top and humidity below — no need to open the dashboard for a quick check.
+The **system tray icon** near the Windows clock shows room temperature on top and humidity below — drawn live onto the icon itself, no need to open the dashboard for a quick check.
 
 ---
 
 ## Features
 
-- **Live BLE sensor** — reads directly from your Bluetooth sensor, no vendor app needed
+- **Live BLE sensor** — reads directly from your Bluetooth sensor over BLE, no vendor app needed
 - **Full PC stats** — CPU usage, GPU temperature & usage (NVIDIA), RAM usage, disk usage
-- **Deep hardware sensors** — CPU temp, disk temp, RAM temp, and fan speeds when [LibreHardwareMonitor](#librehardwaremonitor-for-deep-sensor-data) is running
+- **Deep hardware sensors** — CPU temp, disk temp, RAM temp, and fan speeds when [LibreHardwareMonitor](#librehardwaremonitor--for-deep-sensor-data) is running
+- **Custom app icon** — thermometer + humidity droplet icon at 7 sizes (16–256 px), shown in the taskbar, title bar, and desktop shortcut
 - **System tray icon** — always-on, live values drawn directly onto the icon graphic
-- **Two-tier alarm system** — configurable warning (yellow) and critical (red) thresholds for every sensor
-- **Voice + beep alarm** — on critical room temperature, plays repeating beep tones followed by a spoken alert using Windows built-in speech synthesis
-- **Persistent settings** — alarm thresholds survive restarts via `config.json`
-- **Auto-reconnect** — recovers automatically if Bluetooth drops
+- **Two-tier alarm system** — configurable warning (yellow) and critical (red) thresholds per sensor
+- **Repeating voice + beep alarm** — on critical room temperature: three beep tones → spoken alert via Windows built-in speech → three beep tones → 8-second pause → repeats until temperature drops
+- **Persistent settings** — alarm thresholds saved to `config.json`, survive restarts
+- **Auto-reconnect** — recovers automatically if Bluetooth drops, retries every 10 seconds
+- **Windows startup** — optional auto-start with Windows via registry (no admin rights needed)
+- **Standalone EXE** — can be compiled to a self-contained executable with no Python requirement
 
 ---
 
@@ -77,21 +80,21 @@ The **system tray icon** near the Windows clock shows the room temperature on to
 
 - Windows 10 / 11 with Bluetooth 4.0+ adapter
 - NVIDIA GPU for GPU stats via `nvidia-smi` (AMD/Intel show N/A)
-- [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) — optional, enables CPU temp, disk temp, RAM temp, and fan speeds
+- [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) — optional, unlocks CPU temp, disk temp, RAM temp, and fan speeds
 
 ---
 
 ## Installation
 
-### 1. Clone
+### Option A — Python (recommended for development)
 
+**1. Clone**
 ```powershell
 git clone https://github.com/PBK-25/AmbientCore.git
 cd AmbientCore
 ```
 
-### 2. Install dependencies
-
+**2. Install dependencies**
 ```powershell
 pip install bleak pystray pillow psutil
 ```
@@ -100,74 +103,101 @@ pip install bleak pystray pillow psutil
 |---|---|
 | `bleak` | Bluetooth Low Energy |
 | `pystray` | System tray icon |
-| `pillow` | Drawing values onto the tray icon |
+| `pillow` | Drawing live values onto the tray icon + icon generation |
 | `psutil` | CPU, RAM, disk stats |
 
 Everything else (`tkinter`, `winsound`, `subprocess`, `asyncio`) is Python standard library.
 
-### 3. Find your sensor's address
-
+**3. Find your sensor's MAC address**
 ```powershell
 python scanner.py
 ```
+Look for your device in the list and note its **Address** (e.g. `A4:C1:38:87:3F:10`).
 
-Look for your device in the list. Note its **Address** (e.g. `A4:C1:38:87:3F:10`).
+**4. Set your sensor address**
 
-### 4. Set your sensor address
-
-Open `widget.py` and update line 13:
-
+Open `widget.py` and update line 17:
 ```python
 TARGET_ADDRESS = "A4:C1:38:87:3F:10"   # ← your sensor's address
 ```
 
-### 5. Run
+**5. Run the one-time setup** (generates icon, adds to startup, creates desktop shortcut)
+```powershell
+python install.py
+```
 
+**6. Run**
 ```powershell
 python widget.py
 ```
+
+> From now on use the Desktop shortcut or let Windows start it automatically on boot.
+
+---
+
+### Option B — Standalone EXE (no Python required to run)
+
+**1. Build the exe** (only needs to be done once, requires Python + PyInstaller)
+```powershell
+pip install pyinstaller
+python build_exe.py
+```
+
+Output: `dist\AmbientCore\AmbientCore.exe`
+
+**2. Run the exe**
+
+Double-click `AmbientCore.exe`. On first launch, a dialog asks if you want to add it to Windows startup and create a desktop shortcut — click **Yes** and it sets itself up automatically.
+
+> You can share the entire `dist\AmbientCore\` folder with anyone on Windows — no Python installation needed.
 
 ---
 
 ## LibreHardwareMonitor — for Deep Sensor Data
 
-CPU temperature, disk temperature, RAM temperature, and fan speeds are not exposed by Windows through standard APIs. [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) bridges that gap by publishing all sensor data via WMI, which AmbientCore queries automatically.
+CPU temperature, disk temperature, RAM temperature, and fan speeds are **not exposed by Windows** through standard Python APIs (`psutil` sensor support is Linux-only). [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) bridges that gap by publishing all sensor data via WMI, which AmbientCore queries automatically when it detects LHM is running.
 
 **Setup (one-time):**
 
 1. Download the latest release from the [LHM releases page](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases)
 2. Extract and run `LibreHardwareMonitor.exe`
-3. Optional: **Options → Run On Windows Startup**
-4. Restart `widget.py`
+3. Recommended: **Options → Run On Windows Startup**
+4. Restart AmbientCore
 
 When LHM is active, the dashboard footer shows:
 ```
 ✓  LibreHardwareMonitor active — full sensor data
 ```
+When it is not running, the footer shows a reminder with a link.
 
 ---
 
 ## Alarm Settings
 
-Open **⚙ Settings** in the dashboard to configure:
+Click **⚙ Settings** in the dashboard to configure:
 
 | Threshold | Default | Effect |
 |---|---|---|
-| Room Temp — Warning | 40 °C | Text turns yellow |
-| Room Temp — Critical | 50 °C | Text turns red + repeating voice alarm |
-| GPU Temp — Warning | 80 °C | Text turns yellow |
-| CPU Usage — Warning | 90 % | Text turns yellow |
-| RAM Usage — Warning | 85 % | Text turns yellow |
+| Room Temp — Warning | 40 °C | Value turns **yellow** |
+| Room Temp — Critical | 50 °C | Value turns **red** + repeating voice alarm |
+| GPU Temp — Warning | 80 °C | Value turns **yellow** |
+| CPU Usage — Warning | 90 % | Value turns **yellow** |
+| RAM Usage — Warning | 85 % | Value turns **yellow** |
 
-**Alarm pattern:** three beep tones → *"Room temperature critical. Please shut down power now."* → three beep tones → 8-second pause → repeats until temperature drops below critical.
+**Alarm pattern (repeats until temp drops):**
+```
+Beep Beep Beep  →  "Room temperature critical. Please shut down power now."  →  Beep Beep Beep  →  8s pause  →  ...
+```
 
-> **Why 40 / 50 °C?** These thresholds are designed for monitoring ambient air inside a confined cable management space. 40 °C signals poor airflow; 50 °C means components are under thermal stress and should be investigated immediately.
+Voice uses Windows' built-in speech synthesis — no extra packages or internet required.
+
+> **Why 40 / 50 °C?** These defaults are designed for monitoring ambient air inside a confined cable management space. 40 °C signals poor airflow; 50 °C means power bricks and capacitors are under thermal stress and the setup should be investigated immediately.
 
 ---
 
 ## Adding a Different BLE Sensor
 
-AmbientCore works with any BLE sensor that sends data via notifications. Here is how to adapt it to a new device.
+AmbientCore works with any BLE sensor that sends data via notifications. Here is how to adapt it.
 
 ### Step 1 — Discover the device
 
@@ -186,7 +216,6 @@ TARGET_ADDRESS = "XX:XX:XX:XX:XX:XX"
 Use **nRF Connect** (Android/iOS) or **BLE Scanner**. Connect to your sensor and look for a characteristic with an **N** (Notify) flag. That UUID is what you need.
 
 **Option B — Python script**
-
 ```python
 import asyncio
 from bleak import BleakClient
@@ -203,8 +232,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Look for a characteristic with `notify` in its properties. Update `widget.py`:
-
+Update `widget.py`:
 ```python
 DATA_UUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
@@ -212,14 +240,12 @@ DATA_UUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ### Step 3 — Decode the bytes
 
 Temporarily replace `_ble_notify` in `widget.py` to print raw bytes:
-
 ```python
 def _ble_notify(sender, raw):
     print(f"Raw ({len(raw)} bytes): {list(raw)}  hex: {raw.hex()}")
 ```
 
-Run the widget and watch the output while the sensor updates. Once you know the byte layout, decode it:
-
+Once you know the byte layout, update the decoder:
 ```python
 # Example — 2-byte big-endian temperature ÷ 10, 1-byte humidity
 def _ble_notify(sender, raw):
@@ -251,11 +277,23 @@ s = _make_section(content, "SERVER ROOM", BLUE)   # rename from "ELECTRICAL CONN
 ```
 AmbientCore/
 ├── widget.py           # Main app — run this
-├── scanner.py          # BLE device discovery
-├── xiaomi_monitor.py   # Minimal terminal-only reader
+├── install.py          # One-time setup: icon + startup + desktop shortcut
+├── build_exe.py        # Builds a standalone AmbientCore.exe via PyInstaller
+├── icon.ico            # App icon (7 sizes: 16–256 px)
+├── scanner.py          # BLE device discovery utility
+├── xiaomi_monitor.py   # Minimal terminal-only data reader
 ├── widget_Single.py    # Minimal BLE-only widget (no PC stats)
-├── config.json         # Auto-created — stores alarm thresholds
 └── README.md
+```
+
+> `config.json` and `dist/` are excluded from the repo via `.gitignore` — they are generated locally.
+
+---
+
+## Removing from Startup
+
+```powershell
+python install.py --uninstall
 ```
 
 ---
