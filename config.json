@@ -1,0 +1,8 @@
+{
+  "room_warn": 40.0,
+  "room_critical": 50.0,
+  "gpu_warn": 80.0,
+  "cpu_usage_warn": 90.0,
+  "ram_warn": 85.0,
+  "sound_alarm": true
+}

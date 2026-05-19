@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import asyncio, threading, tkinter, psutil, pystray, subprocess, json, os, sys, winsound; from PIL import Image, ImageDraw, ImageFont; from bleak import BleakClient; print\\('All imports OK'\\)\")",
+      "Bash(python -c \"import asyncio, threading, tkinter, psutil, pystray, subprocess, json, os, sys, time, winsound; from PIL import Image, ImageDraw, ImageFont; from bleak import BleakClient; print\\('All imports OK'\\)\")"
+    ]
+  }
+}
