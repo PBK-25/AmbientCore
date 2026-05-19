@@ -16,7 +16,17 @@ from bleak import BleakClient
 # ── Constants ──────────────────────────────────────────────────────────────────
 TARGET_ADDRESS = "A4:C1:38:87:3F:10"
 DATA_UUID      = "ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6"
-CONFIG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+# Support both normal Python execution and PyInstaller frozen exe
+if getattr(sys, "frozen", False):
+    _DIR    = os.path.dirname(sys.executable)   # folder containing the .exe
+    _BUNDLE = sys._MEIPASS                       # folder where bundled files live
+else:
+    _DIR    = os.path.dirname(os.path.abspath(__file__))
+    _BUNDLE = _DIR
+
+CONFIG_FILE = os.path.join(_DIR,    "config.json")   # lives next to exe (user-writable)
+ICON_PATH   = os.path.join(_BUNDLE, "icon.ico")      # bundled inside the exe
 
 DEFAULT_CFG = {
     "room_warn":      40.0,
@@ -626,9 +636,87 @@ class SettingsWindow:
         self.w.destroy()
 
 
+# ── First-run setup (only triggers when running as a compiled .exe) ────────────
+def _first_run_setup():
+    """When running as an exe for the first time, offer startup + shortcut install."""
+    import winreg as _wr
+    import ctypes
+
+    marker = os.path.join(_DIR, ".setup_done")
+    if os.path.exists(marker):
+        return
+
+    # Ask user
+    resp = ctypes.windll.user32.MessageBoxW(
+        0,
+        "Welcome to AmbientCore!\n\n"
+        "Would you like to:\n"
+        "  • Start AmbientCore automatically with Windows\n"
+        "  • Add a shortcut to your Desktop\n",
+        "AmbientCore Setup",
+        0x00000024,  # MB_YESNO | MB_ICONQUESTION
+    )
+    if resp == 6:  # IDYES
+        # Startup registry entry
+        cmd = f'"{sys.executable}"'
+        try:
+            key = _wr.OpenKey(
+                _wr.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0, _wr.KEY_SET_VALUE,
+            )
+            _wr.SetValueEx(key, "AmbientCore", 0, _wr.REG_SZ, cmd)
+            _wr.CloseKey(key)
+        except Exception:
+            pass
+
+        # Desktop shortcut via VBScript
+        try:
+            key2 = _wr.OpenKey(
+                _wr.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+            )
+            desktop = os.path.expandvars(_wr.QueryValueEx(key2, "Desktop")[0])
+            _wr.CloseKey(key2)
+        except Exception:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+
+        lnk  = os.path.join(desktop, "AmbientCore.lnk")
+        icon = os.path.join(_BUNDLE, "icon.ico")
+        vbs  = (
+            'Set sh = WScript.CreateObject("WScript.Shell")\n'
+            f'Set lnk = sh.CreateShortcut("{lnk}")\n'
+            f'lnk.TargetPath = "{sys.executable}"\n'
+            f'lnk.WorkingDirectory = "{_DIR}"\n'
+            f'lnk.IconLocation = "{icon}"\n'
+            'lnk.Description = "AmbientCore - Environment & Hardware Monitor"\n'
+            "lnk.Save\n"
+        )
+        vbs_path = os.path.join(_DIR, "_tmp.vbs")
+        try:
+            with open(vbs_path, "w") as f:
+                f.write(vbs)
+            subprocess.run(
+                ["cscript", "//nologo", vbs_path],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
+            )
+        finally:
+            if os.path.exists(vbs_path):
+                os.remove(vbs_path)
+
+    # Write marker so this never runs again
+    open(marker, "w").close()
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 root = tk.Tk()
+if os.path.exists(ICON_PATH):
+    root.iconbitmap(ICON_PATH)
 root.withdraw()
+
+if getattr(sys, "frozen", False):
+    _first_run_setup()
 
 dashboard = Dashboard(root)
 root.deiconify()
