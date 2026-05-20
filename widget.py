@@ -1,4 +1,5 @@
 import asyncio
+import ctypes
 import csv
 import threading
 import tkinter as tk
@@ -425,7 +426,7 @@ def run_tray():
         ),
         pystray.MenuItem(
             "24h Graph",
-            lambda i, it: root.after(0, lambda: GraphWindow(root)),
+            lambda i, it: root.after(0, lambda: _open_graph(root)),
         ),
         pystray.MenuItem("Exit", lambda i, it: root.after(0, _exit_app)),
     )
@@ -434,6 +435,8 @@ def run_tray():
 
 def _show_dashboard():
     root.deiconify()
+    if os.path.exists(ICON_PATH):
+        root.iconbitmap(ICON_PATH)
     root.lift()
     root.focus_force()
 
@@ -475,19 +478,36 @@ def _make_row(parent, label_text, default_color):
     return lbl
 
 # ── 24-hour graph window ───────────────────────────────────────────────────────
-_mpl = None
+_mpl      = None
+_graph_win = None   # single-instance guard
 
 def _ensure_mpl():
     global _mpl
     if _mpl is not None:
         return _mpl
-    import matplotlib
-    matplotlib.use("TkAgg")
-    import matplotlib.dates as mdates
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    _mpl = (matplotlib, mdates, Figure, FigureCanvasTkAgg)
-    return _mpl
+    try:
+        import matplotlib
+        matplotlib.use("TkAgg")
+        import matplotlib.dates as mdates
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        _mpl = (matplotlib, mdates, Figure, FigureCanvasTkAgg)
+        return _mpl
+    except ImportError:
+        return None
+
+def _open_graph(master):
+    """Open the graph window, or raise/focus the existing one."""
+    global _graph_win
+    if _graph_win is not None:
+        try:
+            if _graph_win.w.winfo_exists():
+                _graph_win.w.lift()
+                _graph_win.w.focus_force()
+                return
+        except Exception:
+            pass
+    _graph_win = GraphWindow(master)
 
 class GraphWindow:
     def __init__(self, master):
@@ -497,12 +517,28 @@ class GraphWindow:
         self.w.configure(bg=BG)
         self.w.resizable(True, True)
         self.w.attributes("-topmost", True)
+        if os.path.exists(ICON_PATH):
+            self.w.iconbitmap(ICON_PATH)
         self._after_id = None
         self._build()
         self.w.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self):
-        _, _, Figure, FigureCanvasTkAgg = _ensure_mpl()
+        mpl_result = _ensure_mpl()
+        if mpl_result is None:
+            tk.Label(
+                self.w,
+                text=(
+                    "matplotlib is not installed.\n\n"
+                    "Run in terminal:\n"
+                    "    pip install matplotlib\n\n"
+                    "Then restart AmbientCore."
+                ),
+                font=("Segoe UI", 11), fg=RED, bg=BG, justify="center",
+            ).pack(expand=True)
+            return
+
+        _, _, Figure, FigureCanvasTkAgg = mpl_result
         is_dark = cfg.get("theme", "dark") == "dark"
         fig_bg  = "#1e1e1e" if is_dark else "#f5f5f5"
         ax_bg   = "#252526" if is_dark else "#e8e8e8"
@@ -602,8 +638,10 @@ class GraphWindow:
         self._after_id = self.w.after(60_000, self._schedule_refresh)
 
     def _on_close(self):
+        global _graph_win
         if self._after_id:
             self.w.after_cancel(self._after_id)
+        _graph_win = None
         self.w.destroy()
 
 
@@ -670,7 +708,7 @@ class Dashboard:
             bg=PANEL, fg=WHITE, relief="flat",
             activebackground=BORDER, activeforeground=WHITE,
             padx=8, pady=3, cursor="hand2",
-            command=lambda: GraphWindow(self.root),
+            command=lambda: _open_graph(self.root),
         ).pack(side="right", padx=(4, 0))
         tk.Button(
             bar, text="⚙  Settings", font=("Segoe UI", 9),
@@ -820,6 +858,8 @@ class SettingsWindow:
         self.w.configure(bg=BG)
         self.w.attributes("-topmost", True)
         self.w.resizable(False, False)
+        if os.path.exists(ICON_PATH):
+            self.w.iconbitmap(ICON_PATH)
         self.w.grab_set()
         self._build()
 
@@ -968,6 +1008,14 @@ def _first_run_setup():
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+
+# Tell Windows this is a standalone app so it uses our icon in the taskbar
+# instead of grouping the window under python.exe
+try:
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AmbientCore.Widget.1")
+except Exception:
+    pass
+
 root = tk.Tk()
 if os.path.exists(ICON_PATH):
     root.iconbitmap(ICON_PATH)
@@ -978,6 +1026,8 @@ if getattr(sys, "frozen", False):
 
 dashboard = Dashboard(root)
 root.deiconify()
+if os.path.exists(ICON_PATH):
+    root.iconbitmap(ICON_PATH)
 
 threading.Thread(target=run_ble,   daemon=True).start()
 threading.Thread(target=run_stats, daemon=True).start()

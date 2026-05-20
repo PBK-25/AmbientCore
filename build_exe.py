@@ -1,4 +1,4 @@
-"""
+r"""
 AmbientCore — EXE builder.
 
 Run once with:  python build_exe.py
@@ -15,6 +15,8 @@ import os
 import sys
 import subprocess
 import shutil
+import stat
+import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH  = os.path.join(SCRIPT_DIR, "icon.ico")
@@ -29,12 +31,37 @@ def ensure_icon():
         create_icon()
 
 
+def _on_rm_error(func, path, exc_info):
+    """Clear read-only flags (common on OneDrive) then retry delete."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def clean_build_dirs():
+    """Remove stale build/dist folders before PyInstaller runs."""
+    for folder in ("build", "dist"):
+        path = os.path.join(SCRIPT_DIR, folder)
+        if not os.path.isdir(path):
+            continue
+        print(f"  Removing {folder}\\ ...")
+        try:
+            shutil.rmtree(path, onerror=_on_rm_error)
+        except PermissionError:
+            print()
+            print(f"  Cannot delete {path}")
+            print("  Close AmbientCore.exe, File Explorer windows in this folder,")
+            print("  pause OneDrive sync, then run:  python build_exe.py")
+            print()
+            sys.exit(1)
+
+
 def build():
     print()
     print("  AmbientCore - Building EXE")
     print("  " + "-" * 36)
 
     ensure_icon()
+    clean_build_dirs()
 
     # Check PyInstaller is available
     try:
